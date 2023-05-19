@@ -8,6 +8,11 @@ library(ggplot2)
 library(gridExtra)
 library(reshape2)
 library(corrplot)
+library(Rfast2)
+library(klaR)
+library(naivebayes)
+library(scales)
+library(patchwork)
 
 
 
@@ -34,7 +39,7 @@ df$`Count # of words` <- as.integer(df$`Count # of words`)
 df$Nouns <- as.integer(df$Nouns)
 df$Verb <- as.integer(df$Verb)
 df$adv <- as.integer(df$adv)
-df$Adj <- integer(df$Adj)
+df$Adj <- as.integer(df$Adj)
 
 
 # 2 Bin
@@ -101,7 +106,7 @@ confusionMatrix(cm_2bin)
 # 96.9%
 
 
-# Naive Bayes with contigency table from the df_train and test datasets
+
 con_table_Train <- data.table::data.table(df_train)
 con_table_Test <- data.table::data.table(df_test)
 
@@ -119,8 +124,6 @@ corrplot(cor, method = "color", tl.srt = 45)
 corrplot(cor, method = "number", tl.srt = 45)
 
 
-
-# Mcnemars Test
 cm_2bin
 mcnemar.test(table(df_test$CommentDensity, pred_2bin))
 
@@ -215,10 +218,6 @@ con_FG <- predict(con_FG, con_table_Test)
 cm_FG <- table(con_table_Test$`Final grade`, con_FG)
 confusionMatrix(cm_FG)
 
-
-# Mcnemars Test (2 bin)
-# Change Final Grade into a 2 factored data entry
-# Only grades are A,B,C,D. High = Grades A and B; Low = Grades C and F
 qq <- df_train
 qq$FG <- ifelse(qq$`Assigment grade` %in% c("A", "B"), "High", "Low")
 
@@ -240,16 +239,6 @@ cont_table <- table(qw$FG, pre_FG,
                     dnn = c("Actual", "Predicted"))
 
 cont_table
-
-
-
-
-
-
-
-
-
-
 # Peer Review Rubric
 
 # Correlation Matrix
@@ -282,9 +271,6 @@ ggplot(pr_tab, aes(x = Var1, fill = Type, y = Freq)) + geom_col(aes(x = pre_pr),
        x = "Rubric Mark Points",
        y = "Frequency")
 
-
-
-# McNemar Test
 pr1 <- df_train
 pr1$`Detailed label` <- ifelse(pr1$`Detailed label` %in% c(1:2, 3:4), "Low", "High")
 pr1$`Chart junk` <- ifelse(pr1$`Chart junk` %in% c(1:2, 3:4), "Low", "High")
@@ -303,14 +289,135 @@ pre_pr <- predict(mod_pr, pr2)
 
 cm_pr <- table(pr2$`Detailed label`, pre_pr)
 confusionMatrix(cm_pr)
-
-# Final Mcnemar test
 cm_pr
 mcnemar.test(table(pr2$`Detailed label`, pre_pr))
  ### Because of 100% accuracy the mcnemar test is returning NAs as the result. There needs to be at
 # least something inccorect for it to work.
 
+
+
+
+#### Cross Validation ####
+dft <- df_train
+dft$`Detailed label` <- as.numeric(dft$`Detailed label`)
+dft$`Lie factor` <- as.numeric(dft$`Lie factor`)
+dft$`Data/color ink ratio` <- as.numeric(dft$`Data/color ink ratio`)
+dft$`Chart junk` <- as.numeric(dft$`Chart junk`)
+
+
+# Convert Rubric data type to numeric for cross validation
+dft <- df_train
+dft$`Detailed label` <- as.numeric(dft$`Detailed label`)
+colnames(dft)[7] <- "Detailed_label"
+
+dft$`Lie factor` <- as.numeric(dft$`Lie factor`)
+colnames(dft)[8] <- "Lie_factor"
+
+dft$`Data/color ink ratio` <- as.numeric(dft$`Data/color ink ratio`)
+colnames(dft)[9] <- "Data_color_ink_ratio"
+
+dft$`Chart junk` <- as.numeric(dft$`Chart junk`)
+colnames(dft)[10] <- "Chart_junk"
+
+
+# Cross Validate Rubric
+data <- dft[, c("Detailed_label", "Lie_factor", "Data_color_ink_ratio", "Chart_junk")]
+ctrl <- trainControl(method = "cv", number = 5)
+model <- train(Detailed_label ~ ., data = data, method = "lm", trControl = ctrl)
+
+# CV Results
+cv_results <- model$results
+cv_results
+
+
+
+
+# Prep POS data type to numeric
+dft$`Count # of words` <- as.numeric(dft$`Count # of words`)
+colnames(dft)[11] <- "Word_Count"
+
+dft$Nouns <- as.numeric(dft$Nouns)
+
+dft$Verb <- as.numeric(dft$Verb)
+
+dft$adv <- as.numeric(dft$adv)
+
+dft$Adj <- as.numeric(dft$Adj)
+
+# Cross Validate POS
+data2 <- dft[, c("Word_Count", "Nouns", "Verb", "adv", "Adj")]
+ctrl2 <- trainControl(method = "cv", number = 5)
+model2 <- train(Word_Count ~ ., data = data2, method = "lm", trControl = ctrl)
+
+# Results
+cv_results2 <- model2$results
+cv_results2
+
+
+
 # Create contingency table
 cont_table_pr <- table(pr2$`Detailed label`, pre_pr, 
-                    dnn = c("Actual", "Predicted"))
+                       dnn = c("Actual", "Predicted"))
 cont_table_pr
+
+# BOXPLOT of Predicted Rubric and Acutal Rubric
+
+# Data frame from original rubric prediction
+line1 <- pr_tab
+
+# Rename columns
+line1_renamed <- line1 %>%
+  rename(Actual = Var1, Predicted = pre_pr, Frequency = Freq)
+
+# Convert columns to numeric
+line1_renamed$Predicted <- as.numeric(as.character(line1_renamed$Predicted))
+line1_renamed$Actual <- as.numeric(as.character(line1_renamed$Actual))
+
+# Calculate statistics for predicted values
+predicted_stats <- line1_renamed %>%
+  filter(Predicted != 0) %>%
+  summarise(
+    median = median(Predicted),
+    iqr = IQR(Predicted),
+    lower_outliers = paste(Predicted[Predicted < median - 1.5 * iqr], collapse = ", "),
+    upper_outliers = paste(Predicted[Predicted > median + 1.5 * iqr], collapse = ", ")
+  )
+
+# Calculate statistics for actual values
+actual_stats <- line1_renamed %>%
+  filter(Actual != 0) %>%
+  summarise(
+    median = median(Actual),
+    iqr = IQR(Actual),
+    lower_outliers = paste(Actual[Actual < median - 1.5 * iqr], collapse = ","),
+    upper_outliers = paste(Actual[Actual > median + 1.5 * iqr], collapse = ",")
+  )
+
+
+# Create box plots for predicted values
+predicted_boxplot <- ggplot(line1_renamed, aes(x = "Predicted", y = Predicted)) +
+  geom_boxplot(fill = "lightblue", color = "black") +
+  geom_text(data = predicted_stats, aes(x = median, y = median, label = paste("Median:", median)),
+            vjust = 1.5, hjust = 1.5, color = "red") +
+  geom_text(data = predicted_stats, aes(x = iqr, y = iqr, label = paste("IQR:", iqr)),
+            vjust = -2, hjust = -0.5, color = "red") +
+  labs(x = "Values", y = "Predicted", title = "Box Plot - Predicted Values")
+
+# Create box plots for actual values
+actual_boxplot <- ggplot(line1_renamed, aes(x = "Actual", y = Actual)) +
+  geom_boxplot(fill = "lightgreen", color = "black") +
+  geom_text(data = actual_stats, aes(x = median, y = median, label = paste("Median:", median)),
+            vjust = 1.5, hjust = 1.5, color = "red") +
+  geom_text(data = actual_stats, aes(x = iqr, y = iqr, label = paste("IQR:", iqr)),
+            vjust = -2, hjust = -0.5, color = "red") +
+  labs(x = "Values", y = "Actual", title = "Box Plot - Actual Values")
+
+# Combine box plots
+combined_plot <- predicted_boxplot + actual_boxplot +
+  plot_layout(ncol = 2) + 
+  plot_annotation(title = "Grading Rubric", 
+                  theme = theme(plot.title = element_text(hjust = 0.5, size = 16)))
+
+# Display the combined plot
+combined_plot
+
